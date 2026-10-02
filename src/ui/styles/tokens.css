@@ -1,0 +1,91 @@
+/* Design tokens: "documento istituzionale, futuristico". Cold paper, graphite, one signal tint.
+   No gradients, no glass, no blur, no glow. Every color is a token on :root; dark theme under
+   prefers-color-scheme (guarded by :root:not([data-theme="light"])) and under [data-theme="dark"]. */
+
+:root {
+  --paper: #f4f5f3;
+  --surface: #ebedea;
+  --ink: #14171a;
+  --ink-2: #5b6168;
+  --ink-3: #8a9199;
+  --rule: #d3d7d4;
+  --warp: #9aa3ad;
+  --vera: #1b2e5a;
+  --fix: #c8321e;
+  --wrong: #8a9199;
+  --topic-travel: #2e6f8e;
+  --topic-table: #7a6a2f;
+  --topic-city: #5c4f7a;
+  --topic-travel-ink: #1f4d63;
+  --topic-table-ink: #574a1f;
+  --topic-city-ink: #3f3556;
+
+  --font-en: "Archivo Variable", "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-it: "Source Serif 4 Variable", "Iowan Old Style", "Palatino", Georgia, serif;
+
+  --size-transcript: 34px;
+  --size-vera: 20px;
+  --size-row: 15px;
+  --size-label: 20px;
+  --size-ui: 15px;
+  --size-small: 13px;
+
+  --ease-settle: cubic-bezier(0.2, 0.9, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 260ms;
+  --dur-slow: 420ms;
+
+  --gutter: 16px;
+  --warp-step: 8px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1214;
+    --surface: #171b1e;
+    --ink: #e9ecea;
+    --ink-2: #a3aab1;
+    --ink-3: #6f777e;
+    --rule: #2a3034;
+    --warp: #4c555e;
+    --vera: #9fb4e8;
+    --fix: #f0634d;
+    --wrong: #6f777e;
+    --topic-travel: #5fa3b0;
+    --topic-table: #c2a85a;
+    --topic-city: #a394c9;
+    --topic-travel-ink: #9fd0da;
+    --topic-table-ink: #e6d39a;
+    --topic-city-ink: #cfc3e6;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0f1214;
+  --surface: #171b1e;
+  --ink: #e9ecea;
+  --ink-2: #a3aab1;
+  --ink-3: #6f777e;
+  --rule: #2a3034;
+  --warp: #4c555e;
+  --vera: #9fb4e8;
+  --fix: #f0634d;
+  --wrong: #6f777e;
+  --topic-travel: #5fa3b0;
+  --topic-table: #c2a85a;
+  --topic-city: #a394c9;
+  --topic-travel-ink: #9fd0da;
+  --topic-table-ink: #e6d39a;
+  --topic-city-ink: #cfc3e6;
+}
+
+@media (min-width: 760px) {
+  :root {
+    --size-transcript: 56px;
+    --size-vera: 22px;
+    --size-row: 16px;
+    --gutter: 24px;
+  }
+}
