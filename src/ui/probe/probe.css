@@ -1,0 +1,117 @@
+/* Prova del telefono: a full-screen technical sheet. Status words, thin rules, no icons. */
+
+.probe {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  padding: 0 max(var(--gutter), env(safe-area-inset-left)) env(safe-area-inset-bottom)
+    max(var(--gutter), env(safe-area-inset-right));
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-en);
+  font-size: var(--size-ui);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.probe-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0 10px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+}
+
+.probe-title-main {
+  margin: 0;
+  font-size: var(--size-small);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.probe-intro {
+  max-width: 60ch;
+  margin: 14px 0 8px;
+}
+
+.probe-start {
+  font-size: var(--size-label);
+  min-height: 44px;
+}
+
+.probe-instruction {
+  min-height: 1.4em;
+  margin: 10px 0;
+  font-size: var(--size-label);
+}
+
+.probe-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.probe-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.probe-title {
+  grid-column: 1;
+}
+
+.probe-status {
+  grid-column: 2;
+  text-align: right;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--size-small);
+  color: var(--ink-2);
+}
+
+.probe-row[data-status="ok"] .probe-status {
+  color: var(--ink);
+}
+
+.probe-row[data-status="in corso"] .probe-status {
+  color: var(--vera);
+}
+
+.probe-row[data-status="no"] .probe-status,
+.probe-row[data-status="errore"] .probe-status {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.probe-detail {
+  grid-column: 1 / -1;
+  font-size: var(--size-small);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.probe-detail:empty {
+  display: none;
+}
+
+.probe-hint {
+  max-width: 60ch;
+  margin: 12px 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--ink);
+}
+
+.probe-foot {
+  margin: 16px 0 32px;
+}

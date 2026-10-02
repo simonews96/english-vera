@@ -1,0 +1,641 @@
+/* The loom. Institutional register: cold paper, graphite rules, one signal tint.
+   Only tokens from tokens.css; local custom properties below are derived from them.
+   Animations move transform/opacity only; durations come from the --dur-* tokens, which
+   collapse to 0 under reduced motion, so each state stays readable from geometry alone. */
+
+.loom {
+  --loom-header-h: 44px;
+  --loom-reed-h: 36px;
+  --loom-fell-h: 38dvh;
+  --loom-threshold-h: 72px;
+  --loom-guide-travel: calc(var(--dur-slow) * 2.857); /* ≈ 1200 ms per crossing */
+  --loom-row-thread: var(--ink-3);
+  --loom-thread-scale: 1;
+  --loom-reed-shift: 0px;
+  --loom-pending: 0.35;
+  --loom-tooth: var(--ink-3);
+
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--paper);
+  color: var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.loom-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.loom-bench {
+  display: none;
+}
+
+/* ---------- header strip ---------- */
+
+.loom-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: calc(var(--loom-header-h) + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  border-bottom: 1px solid var(--rule);
+}
+
+.loom-wordmark {
+  font-family: var(--font-it);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.loom-portrait {
+  width: 20px;
+  height: 96px;
+  max-height: var(--loom-header-h);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.loom-portrait-stroke {
+  display: block;
+  height: 2px;
+  width: 100%;
+  background: var(--ink);
+  transform-origin: left center;
+  flex: 0 0 auto;
+}
+
+.loom-meter {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 0 0 0 8px;
+  min-height: 32px;
+  font-size: var(--size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.loom-mark {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 8px;
+  border: 1px solid var(--ink-2);
+  overflow: hidden;
+}
+
+.loom-mark-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--ink-2);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--dur-base) var(--ease-settle);
+}
+
+.loom-mark[data-over="true"] {
+  border-top-width: 2px;
+}
+
+.loom-mark[data-offline="true"] {
+  border-style: dashed;
+}
+
+.loom-mark[data-offline="true"] .loom-mark-fill {
+  opacity: 0.4;
+}
+
+/* ---------- the reed ---------- */
+
+.loom-reed {
+  position: relative;
+  height: var(--loom-reed-h);
+  margin-top: 8px;
+  background-color: var(--surface);
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--loom-tooth) 0 1px,
+    transparent 1px var(--warp-step)
+  );
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  transform: translateY(var(--loom-reed-shift));
+  transition: transform var(--dur-base) var(--ease-settle);
+}
+
+.loom-state {
+  position: absolute;
+  left: 8px;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  font-family: var(--font-en);
+  font-size: var(--size-label);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.loom[data-state="thinking"] {
+  --loom-reed-shift: -6px;
+}
+
+.loom[data-state="speaking"],
+.loom[data-state="correcting"] {
+  --loom-reed-shift: 6px;
+}
+
+.loom[data-state="error"] {
+  --loom-tooth: var(--ink-2);
+}
+
+/* ---------- the fell line zone ---------- */
+
+.loom-fell {
+  position: relative;
+  height: var(--loom-fell-h);
+  min-height: 160px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--rule);
+}
+
+.loom-warp {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.loom-fell-text {
+  position: absolute;
+  left: var(--gutter);
+  right: var(--gutter);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* The guide thread: dashed in thinking, broken in error, hidden otherwise. */
+.loom-guide {
+  position: absolute;
+  left: var(--gutter);
+  right: var(--gutter);
+  top: 50%;
+  height: 2px;
+  display: none;
+  pointer-events: none;
+}
+
+.loom-guide-a,
+.loom-guide-b {
+  position: absolute;
+  top: 0;
+  height: 0;
+  border-top: 2px dashed var(--ink);
+}
+
+.loom[data-state="thinking"] .loom-guide {
+  display: block;
+}
+
+.loom[data-state="thinking"] .loom-guide-a {
+  left: 0;
+  width: 40%;
+  animation: loom-guide-travel var(--loom-guide-travel) linear infinite alternate;
+}
+
+.loom[data-state="thinking"] .loom-guide-b {
+  display: none;
+}
+
+.loom[data-state="error"] .loom-guide {
+  display: block;
+}
+
+.loom[data-state="error"] .loom-guide-a,
+.loom[data-state="error"] .loom-guide-b {
+  border-top-style: solid;
+  width: calc(50% - 14px);
+}
+
+.loom[data-state="error"] .loom-guide-a {
+  left: 0;
+  transform: rotate(-4deg);
+  transform-origin: left center;
+}
+
+.loom[data-state="error"] .loom-guide-b {
+  right: 0;
+  transform: translateY(8px) rotate(4deg);
+  transform-origin: right center;
+}
+
+@keyframes loom-guide-travel {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(150%);
+  }
+}
+
+/* The big transcript. */
+.loom-transcript {
+  position: relative;
+  margin: 0;
+  font-family: var(--font-en);
+  font-size: var(--size-transcript);
+  font-weight: 500;
+  font-stretch: 105%;
+  line-height: 1.1;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.loom-transcript[lang="it"] {
+  font-family: var(--font-it);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.loom-interim {
+  font-weight: 300;
+  opacity: 0.55;
+}
+
+.loom-thread {
+  display: none;
+  height: 4px;
+  width: 48px;
+  margin-top: 6px;
+  background: var(--ink);
+  transform-origin: left top;
+  transform: scaleY(calc(var(--loom-thread-scale) / 4));
+}
+
+.loom[data-state="listening"] .loom-thread,
+.loom[data-state="repeating"] .loom-thread {
+  display: block;
+}
+
+/* Vera's line. */
+.loom-vera {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--vera);
+}
+
+.loom-seg {
+  margin: 0;
+  font-family: var(--font-en);
+  font-size: var(--size-vera);
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.loom-seg[lang="it"] {
+  font-family: var(--font-it);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.loom-seg[data-kind="MODEL"] {
+  font-size: calc(var(--size-vera) * 1.15);
+}
+
+.loom-word {
+  position: relative;
+  opacity: var(--loom-pending);
+  transition: opacity var(--dur-fast) linear;
+}
+
+.loom-word.is-inked,
+.loom-seg[data-status="done"] .loom-word {
+  opacity: 1;
+}
+
+.loom-word.is-current::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--vera);
+}
+
+.loom[data-state="idle"] .loom-vera,
+.loom[data-state="setup"] .loom-vera {
+  opacity: 0.7;
+}
+
+/* ---------- the cloth ---------- */
+
+.loom-cloth {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 96px;
+  padding: 8px 0 8px 16px;
+  overflow-y: auto;
+  content-visibility: auto;
+}
+
+.loom-selvedge {
+  position: absolute;
+  left: 2px;
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.loom-knot {
+  display: block;
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  background: var(--warp);
+}
+
+.loom-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.loom-row {
+  position: relative;
+  padding: 4px 0 5px;
+  font-family: var(--font-en);
+  font-size: var(--size-row);
+  font-stretch: 90%;
+  line-height: 1.25;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.loom-row::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--loom-row-thread);
+}
+
+.loom-row[data-weight="300"] {
+  opacity: 0.8;
+}
+
+.loom-row-en {
+  display: block;
+}
+
+.loom-row-it {
+  display: block;
+  font-size: var(--size-small);
+  color: var(--ink-2);
+}
+
+.loom-ghost {
+  padding: 6px 0;
+  font-family: var(--font-it);
+  font-style: italic;
+  font-size: var(--size-row);
+  color: var(--ink-2);
+  border-bottom: 1px dashed var(--warp);
+}
+
+.loom-beam {
+  --loom-beam-lines: 1;
+  margin-top: 10px;
+  height: calc(var(--loom-beam-lines) * 3px);
+  background-image: repeating-linear-gradient(180deg, var(--ink-2) 0 1px, transparent 1px 3px);
+}
+
+/* ---------- bottom block: notice, threshold, help, text line ---------- */
+
+.loom-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.loom-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: var(--size-ui);
+  color: var(--ink-2);
+}
+
+.loom-notice[data-level="warn"],
+.loom-notice[data-level="error"] {
+  color: var(--ink);
+  border-top: 2px solid var(--ink);
+}
+
+.loom-notice-text {
+  flex: 1 1 auto;
+}
+
+.loom-notice-action {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: var(--size-small);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.loom-threshold-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.loom-threshold {
+  flex: 1 1 auto;
+  height: var(--loom-threshold-h);
+  min-height: var(--loom-threshold-h);
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--surface);
+  font-family: var(--font-en);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+.loom-threshold[aria-disabled="true"] {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.loom[data-state="listening"] .loom-threshold,
+.loom[data-state="repeating"] .loom-threshold,
+.loom.is-pressing .loom-threshold {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.loom-stop {
+  flex: 0 0 auto;
+  min-width: 72px;
+  height: var(--loom-threshold-h);
+  border: 1px solid var(--ink-2);
+  color: var(--ink-2);
+  font-size: var(--size-ui);
+}
+
+.loom-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.loom-help-btn {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  font-size: var(--size-small);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.loom-textline {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+
+.loom-textinput {
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 16px; /* keeps iOS from zooming on focus */
+}
+
+.loom-textinput::placeholder {
+  font-family: var(--font-it);
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.loom-textsend {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
+/* ---------- desktop ---------- */
+
+@media (min-width: 760px) {
+  .loom {
+    --loom-fell-h: 220px;
+    --loom-reed-h: 40px;
+    flex-direction: row;
+    justify-content: center;
+    align-items: stretch;
+    gap: var(--gutter);
+  }
+
+  .loom-column {
+    max-width: 920px;
+    padding-left: 56px; /* room for the selvedge */
+    position: relative;
+  }
+
+  .loom-bench {
+    display: block;
+    flex: 0 0 280px;
+    border-left: 1px solid var(--rule);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    overflow: hidden; /* the label panel inside scrolls on its own */
+  }
+
+  .loom-cloth {
+    padding-left: 0;
+  }
+
+  .loom-selvedge {
+    left: -40px;
+  }
+
+  .loom-portrait {
+    max-height: none;
+  }
+
+  .loom-header {
+    height: calc(var(--loom-header-h) + 52px + env(safe-area-inset-top));
+    align-items: flex-end;
+    padding-bottom: 8px;
+  }
+
+  .loom-threshold {
+    font-size: 18px;
+  }
+}
+
+/* Hidden elements stay hidden even with the display rules above (specificity, no !important). */
+.loom .loom-notice[hidden],
+.loom .loom-notice-action[hidden],
+.loom .loom-textline[hidden],
+.loom .loom-help[hidden],
+.loom .loom-stop[hidden],
+.loom .loom-transcript[hidden],
+.loom .loom-interim[hidden],
+.loom .loom-vera[hidden],
+.loom .loom-row-it[hidden] {
+  display: none;
+}

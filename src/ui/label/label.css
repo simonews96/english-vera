@@ -1,0 +1,359 @@
+/* Etichetta di composizione: technical paper, thin rules, spaced uppercase headings, tabular
+   figures. Words are the controls (a rule under the active one), never icons, never toggles,
+   never shadows or blur. Everything derives from the tokens in tokens.css. */
+
+.label-panel {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-en);
+  font-size: var(--size-ui);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.label-panel[hidden] {
+  display: none;
+}
+
+.label-panel[data-layout="sheet"] {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 90dvh;
+  z-index: 40;
+  border-top: 1px solid var(--ink);
+  padding: 0 max(var(--gutter), env(safe-area-inset-left)) env(safe-area-inset-bottom)
+    max(var(--gutter), env(safe-area-inset-right));
+}
+
+.label-panel[data-layout="side"] {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: 100vw;
+  z-index: 40;
+  border-left: 1px solid var(--rule);
+  padding: 0 var(--gutter);
+}
+
+.label-panel[data-layout="bench"] {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-left: 1px solid var(--rule);
+  padding: 0 var(--gutter);
+}
+
+:root[data-label-open] body {
+  overflow: hidden;
+}
+
+.label-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0 10px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+}
+
+.label-title,
+.label-heading {
+  margin: 0;
+  font-family: var(--font-en);
+  font-weight: 500;
+  font-size: var(--size-small);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.label-heading {
+  color: var(--ink-2);
+  padding-bottom: 6px;
+}
+
+h3.label-heading {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  margin-top: 10px;
+}
+
+.label-body {
+  padding-bottom: 32px;
+}
+
+.label-section {
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.label-section:last-child {
+  border-bottom: 0;
+}
+
+.label-line {
+  margin: 4px 0;
+  color: var(--ink);
+}
+
+.label-note {
+  margin: 6px 0 0;
+  font-size: var(--size-small);
+  color: var(--ink-2);
+  max-width: 60ch;
+}
+
+.label-caption {
+  display: block;
+  margin: 8px 0 2px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Words as controls */
+
+.word {
+  display: inline-block;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.3;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.word:hover {
+  border-bottom-color: var(--rule);
+}
+
+.word[data-active] {
+  border-bottom-color: var(--ink);
+}
+
+.word:disabled {
+  color: var(--ink-3);
+  cursor: default;
+  border-bottom-color: transparent;
+}
+
+.word-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 4px 0;
+  padding: 0;
+}
+
+.word-options .label-note {
+  margin-top: 2px;
+}
+
+.label-close {
+  flex: none;
+}
+
+/* Fields: a rule under the value, nothing else */
+
+.label-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 12px;
+  margin: 8px 0 4px;
+}
+
+.label-field .label-caption {
+  grid-column: 1 / -1;
+}
+
+.label-input {
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink-3);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.label-input:focus {
+  border-bottom-color: var(--ink);
+  outline: none;
+}
+
+.label-input[hidden] {
+  display: none;
+}
+
+.label-input-num {
+  max-width: 10ch;
+}
+
+.label-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  margin: 0;
+  background: transparent;
+}
+
+.label-range::-webkit-slider-runnable-track {
+  height: 1px;
+  background: var(--ink-3);
+}
+
+.label-range::-moz-range-track {
+  height: 1px;
+  background: var(--ink-3);
+}
+
+.label-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 2px;
+  height: 18px;
+  margin-top: -9px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ink);
+}
+
+.label-range::-moz-range-thumb {
+  width: 2px;
+  height: 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ink);
+}
+
+/* Threads: a 2 px line that grows (microphone level, budget) */
+
+.label-thread {
+  position: relative;
+  height: 2px;
+  margin: 10px 0 6px;
+  background: var(--rule);
+}
+
+.label-thread-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--dur-fast) linear;
+}
+
+.label-thread[data-over] {
+  border-top: 1px solid var(--ink);
+  margin-top: 9px;
+}
+
+/* Voice auditions */
+
+.voice-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.voice-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.voice-row:first-child {
+  border-top: 0;
+}
+
+.voice-name {
+  grid-column: 1;
+}
+
+.voice-row[data-chosen] .voice-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+.voice-meta {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: var(--size-small);
+  color: var(--ink-2);
+  text-align: right;
+}
+
+.voice-phrase {
+  grid-column: 1 / -1;
+  color: var(--ink-2);
+  font-size: var(--size-row);
+}
+
+.voice-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 20px;
+}
+
+.voice-noprova {
+  color: var(--ink-3);
+}
+
+/* Diagnostics: the same paper, the app font, tabular figures. Never a console. */
+
+.label-diag {
+  margin: 8px 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-en);
+  font-size: var(--size-small);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--ink);
+  background: transparent;
+}
+
+.label-diag[data-raw="true"] {
+  color: var(--ink-2);
+}
+
+@media (min-width: 760px) {
+  .label-panel[data-layout="sheet"] {
+    height: 90vh;
+  }
+}
+
+/* In the desktop bench the panel is always visible: nothing to close. */
+.label-panel[data-layout="bench"] .label-close {
+  display: none;
+}

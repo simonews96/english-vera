@@ -24,7 +24,8 @@ body {
   overflow-x: hidden;
 }
 
-#app {
+/* :where() keeps the specificity at zero so component rules (e.g. the loom's desktop row layout) win. */
+:where(#app) {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;

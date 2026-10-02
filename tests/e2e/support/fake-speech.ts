@@ -49,6 +49,10 @@ export function installFakeSpeech(options: FakeSpeechOptions): void {
     target.dispatchEvent(event);
   }
 
+  function define(name: string, value: unknown): void {
+    Object.defineProperty(window, name, { value, configurable: true, writable: true });
+  }
+
   // ---- Recognition -------------------------------------------------------------------
   const recognitions: FakeSpeechHandle["recognitions"] = [];
   let active: (EventTarget & Record<string, unknown> & { lang: string; continuous: boolean }) | null = null;
@@ -129,9 +133,8 @@ export function installFakeSpeech(options: FakeSpeechOptions): void {
   }
 
   if (options.recognition ?? true) {
-    const w = window as unknown as Record<string, unknown>;
-    w.SpeechRecognition = FakeRecognition;
-    w.webkitSpeechRecognition = FakeRecognition;
+    define("SpeechRecognition", FakeRecognition);
+    define("webkitSpeechRecognition", FakeRecognition);
   }
 
   // ---- Synthesis ---------------------------------------------------------------------
@@ -230,9 +233,9 @@ export function installFakeSpeech(options: FakeSpeechOptions): void {
     resume() {},
   });
 
-  const w = window as unknown as Record<string, unknown>;
-  w.speechSynthesis = synth;
-  w.SpeechSynthesisUtterance = FakeUtterance;
+  // window.speechSynthesis is a getter-only accessor in Chromium: plain assignment is ignored.
+  define("speechSynthesis", synth);
+  define("SpeechSynthesisUtterance", FakeUtterance);
   setTimeout(() => fire(synth, "voiceschanged", {}), 20);
 
   const handle: FakeSpeechHandle = {

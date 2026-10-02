@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vitest/config";
@@ -36,8 +38,26 @@ function cspPlugin(): Plugin {
   };
 }
 
+function gitCommit(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as {
+  version: string;
+};
+
 export default defineConfig({
   base: BASE,
+  define: {
+    __VERA_VERSION__: JSON.stringify(pkg.version),
+    __VERA_COMMIT__: JSON.stringify(gitCommit()),
+  },
   plugins: [
     cspPlugin(),
     VitePWA({
