@@ -3,6 +3,7 @@
  * The key is never shown after saving: only "presente · ultime 4 cifre · convalidata il …".
  */
 
+import { redactSecrets } from "../../core/redact/redact";
 import type { ModelPresetId } from "../../llm/types";
 import type { MotionSetting, ThemeSetting } from "../../storage/settings";
 import { applyAppearance } from "./appearance";
@@ -32,13 +33,18 @@ export function createKeySection(ctx: SectionContext): Section {
   const status = el("p", { className: "label-line", dataset: { role: "key-status" } });
   const input = el("input", {
     className: "label-input",
+    // Masked, but kept out of the password managers: "one-time-code" is never offered for
+    // saving (and syncing) by Chrome/Edge; the data attributes stop the third-party ones.
     attrs: {
       type: "password",
-      autocomplete: "off",
+      autocomplete: "one-time-code",
       autocapitalize: "off",
       spellcheck: "false",
       placeholder: "sk-ant-…",
       "aria-label": "Chiave API",
+      "data-lpignore": "true",
+      "data-1p-ignore": "true",
+      "data-bwignore": "true",
     },
   });
   const outcome = el("p", {
@@ -81,7 +87,9 @@ export function createKeySection(ctx: SectionContext): Section {
       }
     } catch (error) {
       if (gen !== validating) return;
-      showOutcome(error instanceof Error && error.message ? error.message : "Convalida non riuscita.");
+      showOutcome(
+        error instanceof Error && error.message ? redactSecrets(error.message) : "Convalida non riuscita.",
+      );
     } finally {
       if (gen === validating) validateWord.disabled = false;
       render();

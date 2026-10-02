@@ -6,7 +6,7 @@ describe("text output", () => {
   it("has text-mode capabilities and no voices", async () => {
     const output = createTextOutput({ msPerChar: 0 });
     expect(output.capabilities).toEqual({
-      available: true,
+      available: false,
       wordBoundary: "no",
       selectableVoice: false,
       needsGesture: false,

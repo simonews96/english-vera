@@ -59,6 +59,8 @@ export interface LoomViewModel {
   italianShare: number;
   notice: LoomNotice | null;
   offline: boolean;
+  /** Kind of the last error (`not-allowed`, `timeout`...): names the cause on the reed. */
+  errorKind?: string | null;
   costText: string;
   budgetFraction: number;
   sessionKnots: number;
@@ -433,6 +435,8 @@ export function createLoom(container: HTMLElement, callbacks: LoomCallbacks, opt
     event.preventDefault();
     const text = textInput.value.trim();
     if (text.length === 0) return;
+    // While Vera thinks the sentence would be dropped: keep it in the field instead.
+    if (current?.state === "thinking") return;
     textInput.value = "";
     callbacks.onTextSubmit(text);
   });
@@ -696,7 +700,7 @@ export function createLoom(container: HTMLElement, callbacks: LoomCallbacks, opt
     if (previous?.state !== vm.state && vm.state !== "speaking" && vm.state !== "correcting") {
       spokenMark.clear();
     }
-    setText(stateLabelNode, stateLabel(vm.state, vm.offline));
+    setText(stateLabelNode, stateLabel(vm.state, vm.offline, vm.errorKind ?? null));
     container.dataset.offline = vm.offline ? "true" : "false";
     renderHeader(vm);
     renderTranscript(vm);

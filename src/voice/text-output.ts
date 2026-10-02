@@ -29,8 +29,9 @@ export function createTextOutput(options: TextOutputOptions = {}): SpeechOutput 
     options.clearTimeout ?? ((handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
   const pending = new Set<PendingSpeak>();
 
+  // Not "available" as audio: the probe must not mistake the silent timer for a voice.
   const capabilities: SpeechOutputCapabilities = {
-    available: true,
+    available: false,
     wordBoundary: "no",
     selectableVoice: false,
     needsGesture: false,

@@ -10,8 +10,9 @@ export interface TextInput extends SpeechInput {
   submit(text: string): void;
 }
 
+// Not "available" as a recognizer: the probe must not wait for a sentence from a keyboard.
 const CAPABILITIES: SpeechInputCapabilities = {
-  available: true,
+  available: false,
   continuous: true,
   interimResults: false,
   onDevice: true,

@@ -7,7 +7,7 @@ describe("createTextInput", () => {
     const input = createTextInput();
     const events: SpeechInputEvent[] = [];
     input.subscribe((event) => events.push(event));
-    expect(input.capabilities).toMatchObject({ available: true, continuous: true, profile: "text" });
+    expect(input.capabilities).toMatchObject({ available: false, continuous: true, profile: "text" });
     await input.start({ lang: "en-GB", mode: "utterance" });
     input.submit("  I would like a coffee ");
     expect(events).toEqual([

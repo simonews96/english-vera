@@ -2,8 +2,9 @@
  * Claude client for the browser: streaming structured outputs through the official SDK
  * (`dangerouslyAllowBrowser`, `maxRetries: 0`: the retry policy is the app's own, see
  * docs/PIANO.md §1.1). Request layout, designed so the prompt cache actually hits:
- * system = one stable block with `cache_control`; messages = append-only history, then
- * ONE user message carrying the learner card plus the new utterance.
+ * system = one stable block with `cache_control`; messages = append-only history (its last
+ * message carries the second breakpoint), then ONE user message with the learner card plus
+ * the new utterance.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -58,10 +59,20 @@ function presetParams(preset: ModelPreset): Pick<SdkParams, "model" | "output_co
   return preset.thinking === undefined ? base : { ...base, thinking: preset.thinking };
 }
 
+/**
+ * The history is append-only, so a breakpoint on its last message caches system + history;
+ * the API looks for hits at the earlier block boundaries too, so the previous turn's entry
+ * is reused and only the two new messages are written. The user message that follows
+ * (card + utterance) never repeats and stays out of the cache.
+ */
 function buildTurnParams(request: LlmTurnRequest): SdkParams {
-  const history: Anthropic.Messages.MessageParam[] = request.history.map((message) => ({
+  const lastIndex = request.history.length - 1;
+  const history: Anthropic.Messages.MessageParam[] = request.history.map((message, index) => ({
     role: message.role,
-    content: message.text,
+    content:
+      index === lastIndex
+        ? [{ type: "text", text: message.text, cache_control: { type: "ephemeral" } }]
+        : message.text,
   }));
   return {
     ...presetParams(request.preset),

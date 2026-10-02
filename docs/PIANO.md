@@ -49,14 +49,14 @@ Contromisure: `<link rel="preconnect">` verso `api.anthropic.com`; preflight COR
 | 401 generico | nessun retry | "Chiave non valida: controlla l'etichetta" |
 | 401 "CORS requests are not allowed for this Organization" | nessun retry | "La tua organizzazione Anthropic non permette chiamate dal browser (ZDR)" |
 | 400 "You have reached your specified API usage limits" / 429 `enforced_spend_limit_reached` senza `retry-after` | nessun retry | "Hai raggiunto il limite di spesa impostato in Settings > Billing" |
-| 429 con `retry-after` | attesa pari a `retry-after`, max 3, con conto alla rovescia | "Troppe richieste, riprovo tra 8 s" |
-| 529 / `overloaded_error` nello stream | 1 retry | "Il servizio è sovraccarico, riprovo" |
-| 5xx, errore di rete | 1 retry con backoff | "Il servizio non risponde" |
-| timeout: 20 s agli header, poi watchdog "nessun delta da 8 s" | chiude lo stream | "Filo spezzato: nessuna risposta" |
+| 429 con `retry-after` | attesa pari a `retry-after` (max 60 s), max 3, con conto alla rovescia | durante l'attesa "Troppe richieste: riprovo tra 8 s"; esauriti i tentativi "Troppe richieste: riprova tra N s" |
+| 529 / `overloaded_error` nello stream | 1 retry dopo 1,5 s | durante "Il modello è sovraccarico: riprovo"; poi "Il modello è sovraccarico, riprova tra poco" |
+| 5xx, errore di rete | 1 retry con backoff (1,5 s) | durante "Errore del servizio: riprovo" / "Il servizio non risponde: riprovo"; poi "Errore del servizio, riprova" / "Il servizio non risponde" |
+| timeout: 20 s agli header, poi watchdog "nessun delta da 8 s" | chiude lo stream, 1 retry | durante "Filo spezzato: riprovo"; poi "Filo spezzato: nessuna risposta" |
 | `stop_reason: "refusal"` | un solo nuovo invio dello stesso contesto a `claude-haiku-4-5` (nessun classificatore elencato); se rifiuta ancora, messaggio | "Vera non può rispondere a questo: proviamo un'altra frase" |
-| `max_tokens` | risposta troncata: trattata come errore | "Risposta interrotta, riprovo" |
+| `max_tokens` | risposta troncata: 1 retry, poi errore | durante "Risposta interrotta: riprovo"; poi "Risposta interrotta: riprova" |
 
-Il client SDK gira con `maxRetries: 0` e la politica sopra (altrimenti i retry interni si sommano ai nostri e il conto alla rovescia mente). Su `refusal` e `max_tokens` il JSON parziale **non viene mai validato né scritto nel registro eventi**: quanto Vera ha già detto a voce resta, lo stato no. La frase dell'utente non va mai persa: "Riannoda" la rimanda. Il barge-in non interrompe mai la richiesta HTTP (le risposte sono brevi: si ferma solo la voce), così l'`usage` finale arriva sempre; se una richiesta viene comunque abortita, si conta l'ultimo `message_delta.usage` ricevuto e il turno è marcato "stima parziale".
+Il client SDK gira con `maxRetries: 0` e la politica sopra vive in `streamTurn` (`src/app/App.ts`): prima di ogni nuovo tentativo la macchina riceve `LLM_RETRY` (dimentica i segmenti parziali, torna a "pensa") e l'usage parziale viene contato; "riprovo" compare solo mentre il tentativo parte davvero, l'imperativo "riprova" quando resta solo il tocco sulla soglia. Su `refusal` e `max_tokens` il JSON parziale **non viene mai validato né scritto nel registro eventi**: quanto Vera ha già detto a voce resta, lo stato no. La frase dell'utente non va mai persa: "Riannoda" la rimanda. Il barge-in non interrompe mai la richiesta HTTP (le risposte sono brevi: si ferma solo la voce), così l'`usage` finale arriva sempre; se una richiesta viene comunque abortita, si conta l'ultimo `message_delta.usage` ricevuto e il turno è marcato "stima parziale".
 
 **Costi, rifatti con numeri realistici.** Tariffe ufficiali Sonnet 5.5: $2 input, $10 output, cache read $0,20, cache write $2,50 (TTL 5 minuti) per milione di token. Turno tipico con il caching sopra: ≈1.500 token di system prompt in cache + ≈3.000 di storia in cache + ≈600 nuovi (scheda e ultimo turno) + ≈300 di output JSON ≈ $0,005; i primi turni di ogni sessione costano di più per la scrittura in cache. Sessione da 10 minuti (≈25 turni) ≈ $0,15; 45 minuti al giorno ≈ $0,6-0,8; **≈ 15-25 $ al mese con Sonnet 5.5; con Haiku circa un quarto in meno** (il suo prompt non va in cache sotto 4.096 token), non la metà. Il contatore usa l'`usage` reale restituito dall'API (compresi i token di scrittura cache) moltiplicato per un listino versionato, con data e etichetta "stima" visibili; la spesa è mostrata in dollari, con un cambio in euro facoltativo impostato dall'utente; budget giornaliero predefinito $0,80.
 
@@ -289,7 +289,7 @@ docs/          PIANO.md, ricerca/
 .github/workflows/  check, e2e, deploy
 ```
 
-**Modalità solo testo** come cittadino di prima classe: stessa macchina a stati, `TextInput`/`TextOutput`; serve all'utente quando non può parlare e a me per provare tutto senza audio.
+**Modalità solo testo** come cittadino di prima classe: stessa macchina a stati, `TextInput` in ingresso; **la voce di Vera resta** (`WebSpeechOutput`) ogni volta che il browser ce l'ha, perché la tastiera serve a chi non può parlare o non viene ascoltato, non a chi non vuole sentire; `TextOutput` (silenzioso, a tempo) solo per i browser senza sintesi e per i test.
 
 **Qualità prima di ogni consegna.** `npm run check` verde; Playwright esegue un giro completo in modalità testo con API finta e salva screenshot degli stati principali e dei temi (chiaro, scuro, movimento ridotto), che vengono guardati; test che l'export e il payload di sync non contengano segreti e che `index.html` non abbia script inline. Niente si pubblica rosso.
 

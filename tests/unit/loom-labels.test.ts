@@ -34,6 +34,17 @@ describe("stateLabel", () => {
     expect(stateLabel("speaking", false)).toBe("VERA PARLA");
     expect(stateLabel("repeating", false)).toBe("RIPETI");
     expect(stateLabel("error", false)).toBe("ERRORE");
+    expect(stateLabel("setup", false)).toBe("SERVE LA CHIAVE");
+  });
+
+  it("names the cause of an error: microphone, thread to the model, or generic", () => {
+    expect(stateLabel("error", false, "not-allowed")).toBe("MICROFONO CHIUSO");
+    expect(stateLabel("error", false, "audio-capture")).toBe("MICROFONO CHIUSO");
+    expect(stateLabel("error", false, "timeout")).toBe("FILO SPEZZATO");
+    expect(stateLabel("error", false, "invalid-key")).toBe("FILO SPEZZATO");
+    expect(stateLabel("error", false, "language-not-supported")).toBe("ERRORE");
+    expect(stateLabel("error", true, "timeout")).toBe("SENZA RETE");
+    expect(stateLabel("listening", false, "timeout")).toBe("ASCOLTO");
   });
 
   it("shows SENZA RETE only in resting states when offline", () => {
@@ -59,7 +70,8 @@ describe("thresholdLabel / thresholdAction", () => {
     expect(thresholdAction("speaking", "push")).toBe("interrupt");
     expect(thresholdAction("thinking", null)).toBe("interrupt");
     expect(thresholdAction("error", "push")).toBe("tap");
-    expect(thresholdAction("setup", null)).toBe("label");
+    // Setup taps reach the app, which opens the label on the key section.
+    expect(thresholdAction("setup", null)).toBe("tap");
   });
 });
 
@@ -71,17 +83,19 @@ describe("derived quantities", () => {
     expect(beamLineCount(100_000)).toBe(12);
   });
 
-  it("portrait strokes map length and weight, keeping the latest rows", () => {
+  it("portrait strokes map length and weight, keeping the latest (first) rows", () => {
+    // The cloth is newest-first: row 0 is the latest.
     const rows = Array.from({ length: 60 }, (_, i) => ({
-      textEn: "x".repeat(i + 1),
+      textEn: "x".repeat(60 - i),
       weight: (i % 3 === 0 ? 700 : i % 3 === 1 ? 500 : 300) as 300 | 500 | 700,
     }));
     const strokes = portraitStrokes(rows);
     expect(strokes).toHaveLength(32);
     const first = strokes[0];
     const last = strokes[strokes.length - 1];
-    expect(first?.width).toBeLessThan(last?.width ?? 0);
-    expect(last?.width).toBe(1);
+    expect(first?.width).toBe(1);
+    expect(last?.width).toBeLessThan(first?.width ?? 0);
+    expect(last?.width).toBeCloseTo(29 / 48, 5);
     expect(portraitStrokes([{ textEn: "a", weight: 300 }])[0]).toEqual({ width: 0.1, darkness: 0.35 });
   });
 

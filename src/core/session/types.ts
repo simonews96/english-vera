@@ -34,7 +34,12 @@ export interface TurnTimings {
 
 export type SessionEvent =
   | { readonly type: "SETUP_DONE" }
-  | { readonly type: "START"; readonly mode: ListenMode }
+  | {
+      readonly type: "START";
+      readonly mode: ListenMode;
+      /** Handsfree only: start at rest instead of listening (the app speaks first, e.g. the greeting). */
+      readonly deferListen?: boolean;
+    }
   | { readonly type: "STOP" }
   | { readonly type: "PRESS" }
   | { readonly type: "RELEASE" }
@@ -54,6 +59,10 @@ export type SessionEvent =
       readonly atMs: number;
     }
   | { readonly type: "LLM_ERROR"; readonly error: LlmError }
+  /** The app retries the current request (rate limit, overload, refusal fallback): forget the partial reply. */
+  | { readonly type: "LLM_RETRY" }
+  /** The key was forgotten: back to setup, nothing in flight. */
+  | { readonly type: "RESET_SETUP" }
   | { readonly type: "SPEAK_START"; readonly index: number; readonly atMs: number }
   | { readonly type: "SPEAK_DONE"; readonly index: number; readonly outcome: SpeakOutcome }
   | { readonly type: "INTERRUPT" }

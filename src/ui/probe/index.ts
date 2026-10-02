@@ -51,6 +51,8 @@ export interface Probe {
   destroy(): void;
 }
 
+const IOS_SAFARI_TAB_HINT =
+  "Su iPhone l'app installata non ascolta: usa Vera dalla scheda di Safari, lì ti sente.";
 const IOS_INSTALL_HINT =
   "Su iPhone puoi aggiungere Vera alla schermata Home: Condividi > Aggiungi alla schermata Home. Poi ripeti la prova dall'app installata.";
 
@@ -169,6 +171,11 @@ export function createProbe(container: HTMLElement, deps: ProbeDeps): Probe {
     );
     if (passed && deps.platform.os === "ios" && !deps.platform.standalone) {
       setText(hint, IOS_INSTALL_HINT);
+      hint.hidden = false;
+    }
+    const listening = results.find((r) => r.id === "ascolto");
+    if (deps.platform.os === "ios" && deps.platform.standalone && listening && listening.status !== "ok") {
+      setText(hint, IOS_SAFARI_TAB_HINT);
       hint.hidden = false;
     }
     setText(startWord, "Ripeti la prova");

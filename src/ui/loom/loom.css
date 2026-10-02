@@ -19,7 +19,10 @@
   flex-direction: column;
   align-items: stretch;
   flex: 1 1 auto;
-  min-height: 100dvh;
+  /* A fixed height so the cloth scrolls inside the page: threshold and help words stay
+     under the thumb however long the cloth gets. */
+  height: 100dvh;
+  min-height: 0;
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--paper);
   color: var(--ink);
@@ -27,11 +30,18 @@
   -webkit-user-select: none;
 }
 
+@supports not (height: 100dvh) {
+  .loom {
+    height: 100vh;
+  }
+}
+
 .loom-column {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   width: 100%;
 }
 
@@ -371,6 +381,7 @@
   padding: 8px 0 8px 16px;
   overflow-y: auto;
   content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
 }
 
 .loom-selvedge {

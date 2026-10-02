@@ -610,6 +610,8 @@ export function createWebSpeechInput(options: WebSpeechInputOptions): WebSpeechI
       };
       current = session;
       consecutiveNoSpeech = 0;
+      // The code of an earlier session must not become the reason this one fails to start.
+      lastErrorCode = null;
       attachVisibility();
       launch(session);
     });

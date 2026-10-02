@@ -57,6 +57,21 @@ function runReply(m: SessionMachine, res: TurnResponse): Effect[] {
   return all;
 }
 
+/** Like `runReply`, for a reply whose first `from` segments were already dispatched. */
+function runReplyFrom(m: SessionMachine, res: TurnResponse, from: number): Effect[] {
+  const all: Effect[] = [];
+  res.segments.forEach((segment, index) => {
+    if (index < from) return;
+    all.push(...m.dispatch({ type: "LLM_SEGMENT", segment, index, atMs: 2000 + index }).effects);
+  });
+  all.push(...m.dispatch({ type: "LLM_DONE", response: res, usage: EMPTY_USAGE, atMs: 2500 }).effects);
+  for (let i = 0; i < res.segments.length; i += 1) {
+    all.push(...m.dispatch({ type: "SPEAK_START", index: i, atMs: 2600 + i }).effects);
+    all.push(...m.dispatch({ type: "SPEAK_DONE", index: i, outcome: "ended" }).effects);
+  }
+  return all;
+}
+
 describe("session machine: setup and modes", () => {
   it("starts in setup, goes idle on SETUP_DONE, listens on handsfree START", () => {
     const { m } = machine();
@@ -335,7 +350,8 @@ describe("session machine: errors", () => {
       type: "LLM_ERROR",
       error: new LlmError("rate-limited", "429", { status: 429, retryAfterMs: 4200 }),
     });
-    expect(err.snapshot.lastError?.message).toBe("Troppe richieste, riprovo tra 5 s");
+    // The imperative: the automatic retries are the app's, and they are over by now.
+    expect(err.snapshot.lastError?.message).toBe("Troppe richieste: riprova tra 5 s");
     const unknown = m.dispatch({ type: "STOP" });
     expect(unknown.snapshot.state).toBe("idle");
     expect(unknown.snapshot.lastError).toBeNull();
@@ -390,7 +406,9 @@ describe("session machine: errors", () => {
     expect(own.snapshot.state).toBe("listening");
     const gaveUp = m.dispatch({ type: "INPUT_END", cause: "silence" });
     expect(gaveUp.snapshot.state).toBe("idle");
+    // The abort is idempotent on the recognizer and closes the level meter in the app.
     expect(gaveUp.effects).toEqual([
+      { type: "abortListening" },
       { type: "notify", level: "info", message: "Non ti sento: tocca per riprovare" },
     ]);
     // Not listening: ignored.
@@ -561,5 +579,172 @@ describe("session machine: immutability", () => {
     m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 1 });
     expect(segmentsBefore).toEqual([]);
     expect(m.snapshot.segments).toHaveLength(1);
+  });
+});
+
+describe("session machine: review fixes", () => {
+  const NEW_SEGMENTS: readonly Segment[] = [
+    { lang: "IT", kind: "SAY", text: "Secondo turno." },
+    { lang: "EN", kind: "MODEL", text: "New model sentence." },
+    { lang: "EN", kind: "ASK", text: "Say it." },
+  ];
+
+  function afterFirstReply(): SessionMachine {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    runReply(m, response("EN"));
+    expect(m.snapshot.state).toBe("listening");
+    return m;
+  }
+
+  it("START with deferListen stays at rest in handsfree and the next TEXT_SUBMIT starts the turn", () => {
+    const { m } = machine();
+    m.dispatch({ type: "SETUP_DONE" });
+    const r = m.dispatch({ type: "START", mode: "handsfree", deferListen: true });
+    expect(r.snapshot.state).toBe("idle");
+    expect(r.snapshot.mode).toBe("handsfree");
+    expect(r.effects).toEqual([]);
+    const greet = m.dispatch({ type: "TEXT_SUBMIT", text: "[inizio sessione]" });
+    expect(greet.snapshot.state).toBe("thinking");
+    expect(types(greet.effects)).toEqual(["abortListening", "callLlm"]);
+    // After the greeting the microphone opens as usual.
+    const all = runReply(m, response("EN"));
+    expect(all.at(-1)).toEqual({ type: "listen", lang: "en-GB", mode: "continuous" });
+  });
+
+  it("REPEAT while the new reply is still streaming repeats the new reply, not the previous one", () => {
+    const m = afterFirstReply();
+    m.dispatch({ type: "FINAL", text: "second" });
+    const first = m.dispatch({ type: "LLM_SEGMENT", segment: NEW_SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    expect(first.effects).toEqual([{ type: "speak", segment: NEW_SEGMENTS[0], index: 0, rate: 1 }]);
+    const r = m.dispatch({ type: "HELP", kind: "REPEAT" });
+    expect(r.effects).toEqual([
+      { type: "cancelSpeech" },
+      { type: "speak", segment: NEW_SEGMENTS[0], index: 0, rate: 1 },
+    ]);
+    expect(r.snapshot.segments).toEqual([NEW_SEGMENTS[0]]);
+    // Later segments keep arriving in order and are spoken after the restarted one.
+    m.dispatch({ type: "LLM_SEGMENT", segment: NEW_SEGMENTS[1] as Segment, index: 1, atMs: 2 });
+    expect(m.snapshot.segments).toEqual([NEW_SEGMENTS[0], NEW_SEGMENTS[1]]);
+    const done0 = m.dispatch({ type: "SPEAK_DONE", index: 0, outcome: "ended" });
+    expect(done0.effects).toEqual([{ type: "speak", segment: NEW_SEGMENTS[1], index: 1, rate: 1 }]);
+    m.dispatch({ type: "LLM_SEGMENT", segment: NEW_SEGMENTS[2] as Segment, index: 2, atMs: 3 });
+    m.dispatch({
+      type: "LLM_DONE",
+      response: response("EN", NEW_SEGMENTS),
+      usage: EMPTY_USAGE,
+      atMs: 4,
+    });
+    m.dispatch({ type: "SPEAK_DONE", index: 1, outcome: "ended" });
+    const last = m.dispatch({ type: "SPEAK_DONE", index: 2, outcome: "ended" });
+    expect(types(last.effects)).toEqual(["commitTurn", "listen"]);
+    const commit = last.effects[0];
+    expect(commit?.type === "commitTurn" && commit.response.segments).toEqual(NEW_SEGMENTS);
+    expect(last.snapshot.turnsCompleted).toBe(2);
+  });
+
+  it("REPEAT during the very first segment of the first reply restarts it instead of saying there is nothing", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    const r = m.dispatch({ type: "HELP", kind: "REPEAT" });
+    expect(types(r.effects)).toEqual(["cancelSpeech", "speak"]);
+    expect(r.snapshot.state).toBe("speaking");
+  });
+
+  it("DIDNT_UNDERSTAND while streaming re-speaks the last English segment received so far", () => {
+    const m = afterFirstReply();
+    m.dispatch({ type: "FINAL", text: "second" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: NEW_SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    m.dispatch({ type: "SPEAK_DONE", index: 0, outcome: "ended" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: NEW_SEGMENTS[1] as Segment, index: 1, atMs: 2 });
+    const r = m.dispatch({ type: "HELP", kind: "DIDNT_UNDERSTAND" });
+    expect(r.effects).toEqual([
+      { type: "cancelSpeech" },
+      { type: "speak", segment: NEW_SEGMENTS[1], index: 1, rate: 0.8 },
+    ]);
+  });
+
+  it("LLM_RETRY forgets the partial reply and goes back to thinking", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    expect(m.snapshot.state).toBe("speaking");
+    const r = m.dispatch({ type: "LLM_RETRY" });
+    expect(r.snapshot.state).toBe("thinking");
+    expect(r.snapshot.segments).toEqual([]);
+    expect(r.effects).toEqual([{ type: "cancelSpeech" }]);
+    // A late SPEAK_DONE of the cancelled utterance is ignored; the retried stream starts at 0.
+    expect(m.dispatch({ type: "SPEAK_DONE", index: 0, outcome: "cancelled" }).snapshot.state).toBe(
+      "thinking",
+    );
+    const again = m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 5 });
+    expect(again.effects).toEqual([{ type: "speak", segment: SEGMENTS[0], index: 0, rate: 1 }]);
+    const all = runReplyFrom(m, response("EN"), 1);
+    expect(types(all).filter((t) => t === "commitTurn")).toHaveLength(1);
+  });
+
+  it("LLM_RETRY while the learner already walked away keeps listening", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    m.dispatch({ type: "INTERRUPT" });
+    const r = m.dispatch({ type: "LLM_RETRY" });
+    expect(r.snapshot.state).toBe("listening");
+    expect(r.effects).toEqual([]);
+    expect(m.dispatch({ type: "LLM_RETRY" }).snapshot.segments).toEqual([]);
+  });
+
+  it("RESET_SETUP goes back to setup from anywhere and ignores the turn in flight", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    m.dispatch({ type: "LLM_SEGMENT", segment: SEGMENTS[0] as Segment, index: 0, atMs: 1 });
+    const r = m.dispatch({ type: "RESET_SETUP" });
+    expect(r.snapshot.state).toBe("setup");
+    expect(r.snapshot.mode).toBeNull();
+    expect(r.snapshot.segments).toEqual([]);
+    expect(types(r.effects)).toEqual(["abortListening", "cancelSpeech"]);
+    const late = m.dispatch({ type: "LLM_DONE", response: response(), usage: EMPTY_USAGE, atMs: 2 });
+    expect(late.effects).toEqual([]);
+    expect(late.snapshot.state).toBe("setup");
+    expect(m.dispatch({ type: "RESET_SETUP" }).effects).toEqual([]);
+  });
+
+  it("HELP while Vera thinks only answers with a hint; in error it is ignored", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    const r = m.dispatch({ type: "HELP", kind: "REPEAT" });
+    expect(r.snapshot.state).toBe("thinking");
+    expect(r.effects).toEqual([{ type: "notify", level: "info", message: "Aspetta: Vera sta pensando" }]);
+    m.dispatch({ type: "LLM_ERROR", error: new LlmError("server", "500", { status: 500 }) });
+    expect(m.dispatch({ type: "HELP", kind: "SLOWER" }).effects).toEqual([]);
+  });
+
+  it("typed text in the error state starts a new request", () => {
+    const { m } = started();
+    m.dispatch({ type: "FINAL", text: "hello" });
+    m.dispatch({ type: "LLM_ERROR", error: new LlmError("server", "500", { status: 500 }) });
+    const r = m.dispatch({ type: "TEXT_SUBMIT", text: "good morning" });
+    expect(r.snapshot.state).toBe("thinking");
+    expect(r.snapshot.lastError).toBeNull();
+    expect(r.effects).toEqual([{ type: "abortListening" }, { type: "callLlm", userText: "good morning" }]);
+    // A spoken final is still refused there (the recognizer is closed).
+    m.dispatch({ type: "LLM_ERROR", error: new LlmError("server", "500", { status: 500 }) });
+    expect(m.dispatch({ type: "FINAL", text: "hello" }).snapshot.state).toBe("error");
+  });
+
+  it("reads the English variant through the getter at every reply", () => {
+    let variant: "en-GB" | "en-US" = "en-GB";
+    const m = createSessionMachine({ now: () => 1, englishVariant: () => variant });
+    m.dispatch({ type: "SETUP_DONE" });
+    m.dispatch({ type: "START", mode: "handsfree" });
+    m.dispatch({ type: "FINAL", text: "hello" });
+    runReply(m, response("EN"));
+    expect(m.snapshot.listenLang).toBe("en-GB");
+    variant = "en-US";
+    m.dispatch({ type: "FINAL", text: "good morning" });
+    runReply(m, response("EN"));
+    expect(m.snapshot.listenLang).toBe("en-US");
+    expect(m.snapshot.englishVariant).toBe("en-US");
   });
 });

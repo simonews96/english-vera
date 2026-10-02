@@ -149,7 +149,7 @@ function describeEvent(event: SpeechInputEvent): string {
  * without a result, or after the ceiling. Reports the whole event sequence.
  */
 export function checkListening(input: SpeechInput, lang: "en-GB" | "en-US"): Promise<CheckOutcome> {
-  if (!input.capabilities.available) {
+  if (!input.capabilities.available || input.capabilities.profile === "text") {
     return Promise.resolve({
       status: "no",
       detail: `riconoscimento non disponibile (${input.capabilities.profile})`,

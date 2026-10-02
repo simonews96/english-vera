@@ -71,12 +71,64 @@ const BASE_ITALIAN_SHARE = 0.65;
 const THINKING_PATIENCE_MS = 6000;
 const MAX_ERRORS = 5;
 
+/** Automatic retries per error kind (docs/PIANO.md §1.1); the SDK itself never retries. */
+const RETRY_LIMITS: Partial<Record<LlmError["kind"], number>> = {
+  "rate-limited": 3,
+  overloaded: 1,
+  server: 1,
+  network: 1,
+  timeout: 1,
+  "max-tokens": 1,
+};
+const RETRY_BACKOFF_MS = 1500;
+const RETRY_WAIT_CAP_MS = 60_000;
+const RETRY_MESSAGES: Partial<Record<LlmError["kind"], string>> = {
+  overloaded: "Il modello è sovraccarico: riprovo",
+  server: "Errore del servizio: riprovo",
+  network: "Il servizio non risponde: riprovo",
+  timeout: "Filo spezzato: riprovo",
+  "max-tokens": "Risposta interrotta: riprovo",
+};
+
+/** Retry bookkeeping of one turn, carried across the attempts. */
+interface Attempt {
+  readonly retries: Readonly<Partial<Record<LlmError["kind"], number>>>;
+  readonly refusalHandled: boolean;
+}
+
+const FIRST_ATTEMPT: Attempt = { retries: {}, refusalHandled: false };
+
 function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
 }
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Where the microphone permission lives, for the browser in use (docs/PIANO.md §1.2). */
+export function micSteps(platform: PlatformInfo): string {
+  if (platform.os === "ios") {
+    return "Su iPhone: tocca «aA» nella barra degli indirizzi, poi Impostazioni sito web > Microfono > Consenti.";
+  }
+  if (platform.os === "android") {
+    return "Su Android: tocca il lucchetto nella barra degli indirizzi, poi Autorizzazioni > Microfono > Consenti.";
+  }
+  if (platform.browser === "safari") {
+    return "In Safari: menu Safari > Impostazioni per questo sito > Microfono > Consenti.";
+  }
+  return "Sul PC: tocca il lucchetto nella barra degli indirizzi, poi Microfono > Consenti, e ricarica la pagina.";
+}
+
+function retryNotice(error: LlmError, leftMs: number): string {
+  if (error.kind === "rate-limited") {
+    return `Troppe richieste: riprovo tra ${Math.max(1, Math.ceil(leftMs / 1000))} s`;
+  }
+  return RETRY_MESSAGES[error.kind] ?? "Riprovo";
 }
 
 export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle {
@@ -99,28 +151,38 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
   let webOutput: WebSpeechOutput | null = null;
   let input: SpeechInput;
   let output: SpeechOutput;
+  /** The learner types (text mode, or a browser that cannot listen). */
+  let typedInput = false;
   let unsubscribeInput: () => void = () => {};
   let micLevel: MicLevel | null = null;
   let micUnsubscribe: () => void = () => {};
   let micPermission = "non richiesto";
   let reactivitySource = "nessuna";
 
+  function ensureWebInput(): WebSpeechInput | null {
+    if (!platform.hasSpeechRecognition) return null;
+    webInput = webInput ?? createWebSpeechInput({ platform, document: win.document });
+    return webInput;
+  }
+
+  function ensureWebOutput(): WebSpeechOutput | null {
+    if (!platform.hasSpeechSynthesis) return null;
+    webOutput = webOutput ?? createWebSpeechOutput({ platform });
+    return webOutput;
+  }
+
+  /**
+   * Text mode only changes the input: Vera keeps her voice whenever the browser has one
+   * (the keyboard is for who cannot speak or be heard, docs/PIANO.md §1.7). The silent
+   * TextOutput serves browsers without synthesis and the tests.
+   */
   function buildEngines(current: Settings): void {
     unsubscribeInput();
     micStop();
-    const wantVoice = !current.textMode;
-    if (wantVoice && platform.hasSpeechRecognition) {
-      webInput = webInput ?? createWebSpeechInput({ platform, document: win.document });
-      input = webInput;
-    } else {
-      input = createTextInput();
-    }
-    if (wantVoice && platform.hasSpeechSynthesis) {
-      webOutput = webOutput ?? createWebSpeechOutput({ platform });
-      output = webOutput;
-    } else {
-      output = createTextOutput({ msPerChar: 25 });
-    }
+    const voiceInput = current.textMode ? null : ensureWebInput();
+    typedInput = voiceInput === null;
+    input = voiceInput ?? createTextInput();
+    output = ensureWebOutput() ?? createTextOutput({ msPerChar: 25 });
     unsubscribeInput = input.subscribe((event) => {
       switch (event.type) {
         case "start":
@@ -138,12 +200,15 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
           dispatch({ type: "INPUT_END", cause: event.cause });
           break;
         case "error":
-          rememberError(`ascolto:${event.code}`, event.message);
+          // Silence and our own aborts are routine: they would push the real errors out of the label.
+          if (event.code !== "no-speech" && event.code !== "aborted") {
+            rememberError(`ascolto:${event.code}`, event.message);
+          }
           dispatch({ type: "INPUT_ERROR", code: event.code, message: event.message });
           break;
       }
     });
-    reactivitySource = current.textMode
+    reactivitySource = typedInput
       ? "nessuna (testo)"
       : usesUtteranceProfile(platform)
         ? "risultati provvisori del riconoscitore"
@@ -153,7 +218,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
   // ---- Session state -------------------------------------------------------------------
   const machine = createSessionMachine({
     now,
-    englishVariant: settings.get().englishVariant,
+    englishVariant: () => settings.get().englishVariant,
     initialListenLang: "it-IT",
   });
   let snapshot: SessionSnapshot = machine.snapshot;
@@ -163,6 +228,8 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
   let sessionKnots = 0;
   let turnsThisSession = 0;
   let notice: LoomNotice | null = null;
+  /** A sticky notice survives the change of phase (e.g. "tocca per sentire Vera"). */
+  let noticeSticky = false;
   let offline = !win.navigator.onLine;
   let italianShare = 1;
   let lastTimings: TurnTimings = {};
@@ -171,11 +238,20 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
   const errors: DiagnosticsError[] = [];
   let pendingUserText = "";
   let activeTurn = 0;
+  /** Generation of the utterance in flight: a late outcome of an older one is ignored. */
+  let speakSeq = 0;
+  /** Model that produced the reply being committed (the refusal fallback changes it). */
+  let lastTurnModel = "";
   let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
   let client: LlmClient | null = null;
   let clientKey = "";
   let probe: Probe | null = null;
   let destroyed = false;
+
+  function setNotice(next: LoomNotice | null, sticky = false): void {
+    notice = next;
+    noticeSticky = next !== null && sticky;
+  }
 
   function rememberError(code: string, message: string): void {
     errors.unshift({ code, at: new Date().toISOString(), message });
@@ -195,6 +271,11 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     return clamp01(BASE_ITALIAN_SHARE + readLangOffset(win.localStorage) / 100);
   }
 
+  /** At rest: nothing is listening, speaking or pending, so a reload would interrupt nothing. */
+  function atRest(): boolean {
+    return snapshot.state === "setup" || (snapshot.state === "idle" && snapshot.mode === null);
+  }
+
   // ---- View ----------------------------------------------------------------------------
   const loom: Loom = createLoom(
     root,
@@ -207,31 +288,41 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       onThresholdPressEnd: () => dispatch({ type: "RELEASE" }),
       onStop: stopSession,
       onInterrupt: () => dispatch({ type: "INTERRUPT" }),
-      onHelp: (kind: HelpKind) => dispatch({ type: "HELP", kind }),
+      onHelp: (kind: HelpKind) => {
+        output.unlock();
+        dispatch({ type: "HELP", kind });
+      },
       onTextSubmit: (text) => {
         output.unlock();
         if (snapshot.state === "setup") {
-          notice = {
+          setNotice({
             level: "warn",
             text: "Prima serve la chiave API.",
             action: { label: "Apri le impostazioni", id: "settings" },
-          };
+          });
           render();
           return;
         }
-        if (snapshot.state === "idle" && snapshot.mode === null) {
-          beginSession();
-        }
+        if (snapshot.state === "idle" && snapshot.mode === null) beginSession(true);
         transcriptLang = /[àèéìòù]|\b(?:il|la|di|che|non|per)\b/i.test(text) ? "IT" : "EN";
         dispatch({ type: "TEXT_SUBMIT", text });
       },
       onNoticeAction: (id) => {
         if (id === "settings") label.open("chiave");
-        else if (id === "retry") dispatch({ type: "RETRY" });
-        else if (id === "text-mode") settings.update({ textMode: true });
+        else if (id === "retry") {
+          output.unlock();
+          setNotice(null);
+          dispatch({ type: "RETRY" });
+        } else if (id === "text-mode") settings.update({ textMode: true });
         else if (id === "probe") openProbe();
+        else if (id === "unlock-replay") {
+          // Inside the tap: iOS unlocks the synthesizer only here, then the reply is said again.
+          output.unlock();
+          setNotice(null);
+          dispatch({ type: "HELP", kind: "REPEAT" });
+        }
       },
-      onOpenLabel: () => label.open(),
+      onOpenLabel: () => label.open(snapshot.state === "setup" ? "chiave" : undefined),
       onRowTap: (id) => {
         const row = rows.find((r) => r.id === id);
         if (!row || snapshot.state !== "idle") return;
@@ -252,6 +343,9 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     },
   );
 
+  // The engines exist before the label asks them for the voice list.
+  buildEngines(settings.get());
+
   function diagnosticsSource(): DiagnosticsSource {
     const current = settings.get();
     const preset = resolvePreset(current);
@@ -259,8 +353,8 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       version,
       commit,
       platform,
-      webInput: current.textMode ? null : webInput,
-      webOutput: current.textMode ? null : webOutput,
+      webInput: typedInput ? null : webInput,
+      webOutput,
       textMode: current.textMode,
       listenLang: snapshot.listenLang,
       reactivitySource,
@@ -282,13 +376,18 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
 
   const label: Label = createLabel(root, {
     settings,
-    listVoices: () => (webOutput ?? output).listVoices(),
+    listVoices: () => output.listVoices(),
     previewVoice: (voiceId, lang) => {
-      const engine = webOutput ?? output;
-      engine.unlock();
-      engine.cancel();
+      if (snapshot.state === "speaking" || snapshot.state === "thinking") {
+        // Cancelling the session's utterance would leave the machine waiting for it.
+        setNotice({ level: "info", text: "Aspetta che Vera finisca, poi riprova il provino." });
+        render();
+        return;
+      }
+      output.unlock();
+      output.cancel();
       const current = settings.get();
-      void engine.speak(lang === "en" ? TEST_PHRASE_EN : TEST_PHRASE_IT, {
+      void output.speak(lang === "en" ? TEST_PHRASE_EN : TEST_PHRASE_IT, {
         lang: lang === "en" ? current.englishVariant : "it-IT",
         voiceId,
         rate: current.rate,
@@ -325,9 +424,17 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     },
     openProbe,
     forgetKey: () => {
+      activeTurn += 1;
       settings.forgetKey();
       client = null;
-      notice = { level: "info", text: "Chiave dimenticata su questo dispositivo." };
+      clientKey = "";
+      dispatch({ type: "RESET_SETUP" });
+      void wakeLock.release();
+      setNotice({
+        level: "info",
+        text: "Chiave dimenticata su questo dispositivo. Per ricominciare serve una chiave.",
+        action: { label: "Apri le impostazioni", id: "settings" },
+      });
       render();
     },
     appVersion: version,
@@ -340,7 +447,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     return {
       state: snapshot.state,
       mode: snapshot.mode,
-      textMode: current.textMode || !platform.hasSpeechRecognition,
+      textMode: typedInput,
       interim: snapshot.interim,
       transcript: snapshot.transcript === FIRST_TURN_TEXT ? "" : snapshot.transcript,
       transcriptLang,
@@ -355,6 +462,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       italianShare,
       notice,
       offline,
+      errorKind: snapshot.lastError?.kind ?? null,
       costText: `oggi ${formatUsd(summary.todayUsd)}`,
       budgetFraction: current.dailyBudgetUsd > 0 ? summary.todayUsd / current.dailyBudgetUsd : 0,
       sessionKnots,
@@ -368,8 +476,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
 
   // ---- Microphone level (desktop only) -----------------------------------------------
   function micStart(): void {
-    if (micLevel || settings.get().textMode || usesUtteranceProfile(platform) || !platform.hasGetUserMedia)
-      return;
+    if (micLevel || typedInput || usesUtteranceProfile(platform) || !platform.hasGetUserMedia) return;
     const level = createMicLevel();
     micLevel = level;
     micUnsubscribe = level.subscribe((value) => loom.setMicLevel(value));
@@ -409,7 +516,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
           (error: unknown) => {
             const code = error instanceof SpeechInputStartError ? error.code : "unknown";
             const message = error instanceof Error ? error.message : String(error);
-            if (code !== "aborted") rememberError(`ascolto:${code}`, message);
+            if (code !== "aborted" && code !== "no-speech") rememberError(`ascolto:${code}`, message);
             dispatch({ type: "INPUT_ERROR", code, message });
           },
         );
@@ -428,21 +535,26 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
         speakSegment(effect.segment, effect.index, effect.rate);
         break;
       case "cancelSpeech":
+        speakSeq += 1;
         output.cancel();
         pacer.cancel();
         break;
       case "commitTurn":
         commitTurn(effect.response.segments, effect.usage, effect.timings, effect.response.learned);
         break;
-      case "notify":
-        notice = {
+      case "notify": {
+        const action = noticeAction(effect.level);
+        const steps =
+          effect.level === "error" && snapshot.lastError?.kind === "not-allowed"
+            ? ` ${micSteps(platform)}`
+            : "";
+        setNotice({
           level: effect.level,
-          text: effect.message,
-          ...(noticeAction(effect.level)
-            ? { action: noticeAction(effect.level) as { label: string; id: string } }
-            : {}),
-        };
+          text: `${effect.message}${steps}`,
+          ...(action ? { action } : {}),
+        });
         break;
+      }
       case "log":
         break;
     }
@@ -489,20 +601,36 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       userText: buildUserMessage(card, userText, help),
       preset: resolvePreset(current),
     };
-    await streamTurn(llm, request, turn, false);
+    await streamTurn(llm, request, turn, FIRST_ATTEMPT);
+  }
+
+  /** Shows the countdown while waiting; returns early when the turn is superseded. */
+  async function waitBeforeRetry(error: LlmError, waitMs: number, turn: number): Promise<void> {
+    const until = now() + waitMs;
+    while (turn === activeTurn && !destroyed) {
+      const left = until - now();
+      if (left <= 0) return;
+      setNotice({ level: "warn", text: retryNotice(error, left) });
+      render();
+      await sleep(Math.min(1000, left));
+    }
   }
 
   async function streamTurn(
     llm: LlmClient,
     request: LlmTurnRequest,
     turn: number,
-    retried: boolean,
+    attempt: Attempt,
   ): Promise<void> {
     const extractor = createSegmentExtractor();
     let usage: LlmUsage = EMPTY_USAGE;
     let firstToken = false;
     let index = 0;
     const model = request.preset.model;
+    lastTurnModel = model;
+    const recordPartial = (): void => {
+      if (usage.outputTokens > 0 || usage.inputTokens > 0) meter.record({ usage, model, partial: true });
+    };
     try {
       for await (const event of llm.stream(request)) {
         if (turn !== activeTurn) break;
@@ -532,23 +660,46 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
             return;
           }
           case "error": {
-            if (event.error.kind === "refusal" && !retried && model !== PRESETS.haiku.model) {
-              meter.record({ usage, model, partial: true });
-              await streamTurn(llm, { ...request, preset: PRESETS.haiku }, turn, true);
+            const error = event.error;
+            recordPartial();
+            if (error.kind === "refusal" && !attempt.refusalHandled && model !== PRESETS.haiku.model) {
+              // One resend of the same context to Haiku; the partial reply is forgotten first.
+              rememberError(`modello:${error.kind}`, error.message);
+              dispatch({ type: "LLM_RETRY" });
+              await streamTurn(llm, { ...request, preset: PRESETS.haiku }, turn, {
+                ...attempt,
+                refusalHandled: true,
+              });
               return;
             }
-            if (usage.outputTokens > 0 || usage.inputTokens > 0)
-              meter.record({ usage, model, partial: true });
-            rememberError(`modello:${event.error.kind}`, event.error.message);
-            dispatch({ type: "LLM_ERROR", error: event.error });
+            const used = attempt.retries[error.kind] ?? 0;
+            if (used < (RETRY_LIMITS[error.kind] ?? 0)) {
+              rememberError(`modello:${error.kind}`, error.message);
+              const waitMs =
+                error.kind === "rate-limited" && error.retryAfterMs !== undefined
+                  ? Math.min(error.retryAfterMs, RETRY_WAIT_CAP_MS)
+                  : RETRY_BACKOFF_MS * (used + 1);
+              dispatch({ type: "LLM_RETRY" });
+              await waitBeforeRetry(error, waitMs, turn);
+              if (turn !== activeTurn || destroyed) return;
+              await streamTurn(llm, request, turn, {
+                ...attempt,
+                retries: { ...attempt.retries, [error.kind]: used + 1 },
+              });
+              return;
+            }
+            rememberError(`modello:${error.kind}`, error.message);
+            dispatch({ type: "LLM_ERROR", error });
             return;
           }
         }
       }
+      // Left by a newer turn or a stop: what the model already produced is still paid for.
+      if (turn !== activeTurn) recordPartial();
     } catch (error: unknown) {
       const llmError = toLlmError(error);
       rememberError(`modello:${llmError.kind}`, llmError.message);
-      dispatch({ type: "LLM_ERROR", error: llmError });
+      if (turn === activeTurn) dispatch({ type: "LLM_ERROR", error: llmError });
     }
   }
 
@@ -558,7 +709,11 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     const voiceId = segment.lang === "IT" ? current.voiceIt : current.voiceEn;
     const calibrationKey = voiceId ?? lang;
     const factor = calibration.get(calibrationKey);
-    const estimatedMs = estimateWordTimings(segment.text, segment.lang, rate, factor).totalMs;
+    // The calibration compares the real duration with the raw estimate: feeding it the
+    // corrected one would make the factor converge to the square root of the truth.
+    const rawMs = estimateWordTimings(segment.text, segment.lang, rate, 1).totalMs;
+    const seq = ++speakSeq;
+    const voiced = output === webOutput;
     let startedAt = 0;
     let sawBoundary = false;
     void output
@@ -567,26 +722,43 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
         ...(voiceId ? { voiceId } : {}),
         rate,
         onStart: () => {
+          if (seq !== speakSeq) return;
           startedAt = now();
           dispatch({ type: "SPEAK_START", index, atMs: startedAt });
           pacer.start(segment.text, segment.lang, rate, factor, (word) => loom.setSpeakingWord(index, word));
         },
         onBoundary: (charIndex) => {
+          if (seq !== speakSeq) return;
           sawBoundary = true;
           pacer.boundary(charIndex);
         },
       })
       .then((outcome) => {
+        // An utterance replaced by a newer one (replay, interrupt, stop) has nothing left to
+        // report: its late "cancelled" must not pass for the new utterance with the same index.
+        if (seq !== speakSeq) return;
         if (outcome === "ended") {
           pacer.end();
           if (startedAt > 0) {
-            calibration.observe(calibrationKey, estimatedMs, now() - startedAt);
+            calibration.observe(calibrationKey, rawMs, now() - startedAt);
             lastCalibrationVoice = calibrationKey;
           }
+          if (noticeSticky) setNotice(null);
         } else {
           pacer.cancel();
         }
-        boundaryMode = current.textMode ? "no" : sawBoundary ? "yes" : "estimated";
+        if (outcome === "error" && output.capabilities.needsGesture) {
+          // iPhone: the utterance was discarded because no gesture unlocked the voice yet.
+          setNotice(
+            {
+              level: "warn",
+              text: "La voce non è partita.",
+              action: { label: "Tocca per sentire Vera", id: "unlock-replay" },
+            },
+            true,
+          );
+        }
+        boundaryMode = voiced ? (sawBoundary ? "yes" : "estimated") : "no";
         dispatch({ type: "SPEAK_DONE", index, outcome });
       });
   }
@@ -601,7 +773,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     history.push({ role: "assistant", text: segments.map((segment) => segment.text).join(" ") });
     turnsThisSession += 1;
     lastTimings = timings;
-    meter.record({ usage, model: resolvePreset(settings.get()).model });
+    meter.record({ usage, model: lastTurnModel || resolvePreset(settings.get()).model });
     for (const item of learned) {
       rows.unshift({
         id: `row-${rows.length + 1}-${now()}`,
@@ -620,13 +792,14 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
   }
 
   // ---- Session control -------------------------------------------------------------------
-  function beginSession(): void {
+  /** Starts a session: wake lock, counters, one knot; `deferListen` when Vera speaks first. */
+  function beginSession(deferListen = false): void {
     output.unlock();
     void wakeLock.request();
     meter.startSession();
     sessionKnots += 1;
-    notice = null;
-    dispatch({ type: "START", mode: settings.get().listenMode });
+    setNotice(null);
+    dispatch({ type: "START", mode: settings.get().listenMode, deferListen });
   }
 
   function thresholdTap(): void {
@@ -636,10 +809,14 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       return;
     }
     if (state === "idle") {
-      beginSession();
-      if (history.length === 0 && settings.get().listenMode === "handsfree") {
-        dispatch({ type: "TEXT_SUBMIT", text: FIRST_TURN_TEXT });
+      // The first turn is Vera's (greeting and first sentence): the microphone opens after it.
+      const greet = history.length === 0;
+      if (snapshot.mode === null) beginSession(greet);
+      else {
+        output.unlock();
+        dispatch({ type: "START", mode: snapshot.mode, deferListen: greet });
       }
+      if (greet) dispatch({ type: "TEXT_SUBMIT", text: FIRST_TURN_TEXT });
       return;
     }
     if (state === "listening" || state === "repeating") {
@@ -648,7 +825,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     }
     if (state === "error") {
       output.unlock();
-      notice = null;
+      setNotice(null);
       dispatch({ type: "RETRY" });
     }
   }
@@ -657,6 +834,7 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     activeTurn += 1;
     dispatch({ type: "STOP" });
     void wakeLock.release();
+    pwa.applyPendingUpdate();
   }
 
   function dispatch(event: SessionEvent): void {
@@ -664,8 +842,17 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     const previous: LoomState = snapshot.state;
     const result = machine.dispatch(event);
     snapshot = result.snapshot;
+    const next = snapshot.state;
+    // Stale hints go before the effects of this very transition add theirs ("Dimmelo in
+    // italiano" must survive the switch to listening that carries it).
+    if (previous !== next) {
+      const leavingError = previous === "error";
+      const newPhase = next === "listening" || next === "speaking";
+      if (notice && !noticeSticky && (leavingError || (newPhase && notice.level !== "error")))
+        setNotice(null);
+    }
     for (const effect of result.effects) runEffect(effect);
-    afterTransition(previous, snapshot.state);
+    afterTransition(previous, next);
     render();
   }
 
@@ -677,26 +864,26 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     }
     if (next === "thinking") {
       thinkingTimer = setTimeout(() => {
-        if (snapshot.state === "thinking") {
-          notice = { level: "info", text: "Ci sto mettendo più del solito." };
+        if (snapshot.state === "thinking" && notice === null) {
+          setNotice({ level: "info", text: "Ci sto mettendo più del solito." });
           render();
         }
       }, THINKING_PATIENCE_MS);
     }
-    if (next === "listening" || next === "speaking") {
-      if (notice && notice.level !== "error") notice = null;
-    }
-    if (next === "idle") pwa.applyPendingUpdate();
+    if (atRest()) pwa.applyPendingUpdate();
   }
 
   // ---- Probe page -------------------------------------------------------------------------
   function openProbe(): void {
     if (probe) return;
+    // The probe owns the microphone and the voice while it runs.
+    stopSession();
     label.close();
     probe = createProbe(root, {
       platform,
-      speechInput: webInput ?? input,
-      speechOutput: webOutput ?? output,
+      // Always the real engines when the browser has them, whatever the input mode says.
+      speechInput: ensureWebInput() ?? input,
+      speechOutput: ensureWebOutput() ?? output,
       requestWakeLock: () => wakeLock.request(),
       onClose: () => {
         probe?.destroy();
@@ -714,10 +901,10 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
 
   // ---- Wiring -----------------------------------------------------------------------------
   const pwa = setupPwa({
-    canApplyNow: () => snapshot.state === "idle" || snapshot.state === "setup",
+    canApplyNow: atRest,
     onUpdateReady: (apply) => {
       if (!apply()) {
-        notice = { level: "info", text: "Vera si è aggiornata: si ricarica alla prossima pausa." };
+        setNotice({ level: "info", text: "Vera si è aggiornata: si ricarica alla prossima pausa." });
         render();
       }
     },
@@ -746,31 +933,29 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
       buildEngines(current);
     }
     if (snapshot.state === "setup" && current.apiKey && current.keyValidatedAt) {
-      notice = null;
+      setNotice(null);
       dispatch({ type: "SETUP_DONE" });
-      if (current.listenMode === "push") dispatch({ type: "START", mode: "push" });
     }
     lastSettings = current;
     render();
   });
 
-  buildEngines(settings.get());
   const initial = settings.get();
   if (initial.apiKey) {
+    // Any listening mode starts at rest: the session begins with the first tap or press.
     dispatch({ type: "SETUP_DONE" });
-    if (initial.listenMode === "push") dispatch({ type: "START", mode: "push" });
-  } else {
-    notice = {
+  }
+  if (!initial.apiKey) {
+    setNotice({
       level: "info",
       text: "Per cominciare serve la tua chiave API: resta solo su questo dispositivo.",
       action: { label: "Apri le impostazioni", id: "settings" },
-    };
-  }
-  if (!platform.hasSpeechRecognition && !initial.textMode) {
-    notice = {
+    });
+  } else if (!platform.hasSpeechRecognition && !initial.textMode) {
+    setNotice({
       level: "warn",
-      text: "Qui posso parlare ma non ascoltarti: uso la modalità testo. Su PC apri Vera in Chrome o Edge.",
-    };
+      text: "Qui posso parlare ma non ascoltarti: scrivi nella riga in basso. Su PC apri Vera in Chrome o Edge.",
+    });
   }
   render();
   onHashChange();
@@ -779,10 +964,19 @@ export function startApp(root: HTMLElement, options: AppOptions = {}): AppHandle
     dispatch,
     snapshot: () => snapshot,
     destroy() {
+      if (destroyed) return;
       destroyed = true;
+      activeTurn += 1;
+      speakSeq += 1;
       unsubscribeSettings();
       unsubscribeInput();
+      input.abort();
+      output.cancel();
+      pacer.cancel();
       micStop();
+      void wakeLock.release();
+      if (thinkingTimer) clearTimeout(thinkingTimer);
+      if (pulseTimer) clearTimeout(pulseTimer);
       win.removeEventListener("online", onOnline);
       win.removeEventListener("offline", onOffline);
       win.removeEventListener("hashchange", onHashChange);

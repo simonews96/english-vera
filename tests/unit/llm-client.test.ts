@@ -124,11 +124,23 @@ describe("createClaudeClient.stream", () => {
     });
     expect(body).not.toHaveProperty("temperature");
     expect(body).not.toHaveProperty("tool_choice");
+    // The last history message carries the second breakpoint (system + history cached);
+    // the new user message (card + utterance) never repeats and stays out of the cache.
     expect(body.messages).toEqual([
       { role: "user", content: "hello" },
-      { role: "assistant", content: "Ciao! Hello!" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Ciao! Hello!", cache_control: { type: "ephemeral" } }],
+      },
       { role: "user", content: "[scheda] livello A0, fase: warmup\n\ncan I have bill" },
     ]);
+  });
+
+  it("with an empty history the only breakpoint is the system block", async () => {
+    const fetch = mockFetchFor(anthropicSseBody(REPLY));
+    const client = createClaudeClient({ apiKey: "sk-ant-test", fetch });
+    await collect(client.stream({ ...request(), history: [], learnerCard: "" }));
+    expect(sentBody(fetch).messages).toEqual([{ role: "user", content: "can I have bill" }]);
   });
 
   it("omits thinking for haiku and effort when the preset has none; adaptive preset carries display", async () => {

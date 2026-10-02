@@ -9,7 +9,7 @@ import type { ListenMode, LoomState } from "../../core/session/types";
 export type ThresholdAction = "tap" | "interrupt" | "press" | "label";
 
 const STATE_LABELS: Record<LoomState, string> = {
-  setup: "IMPOSTAZIONI",
+  setup: "SERVE LA CHIAVE",
   idle: "PRONTA",
   listening: "ASCOLTO",
   thinking: "VERA PENSA",
@@ -19,9 +19,31 @@ const STATE_LABELS: Record<LoomState, string> = {
   error: "ERRORE",
 };
 
-/** The big uppercase label carried by the reed. Offline overrides the resting states only. */
-export function stateLabel(state: LoomState, offline: boolean): string {
+const MICROPHONE_ERRORS = new Set(["not-allowed", "audio-capture", "service-not-allowed", "unsupported"]);
+const THREAD_ERRORS = new Set([
+  "invalid-key",
+  "zdr-cors",
+  "spend-limit",
+  "rate-limited",
+  "overloaded",
+  "server",
+  "network",
+  "timeout",
+  "refusal",
+  "max-tokens",
+  "bad-request",
+]);
+
+/**
+ * The big uppercase label carried by the reed. Offline overrides the resting states only;
+ * in `error` the kind of the last error names the cause (microphone, model, generic).
+ */
+export function stateLabel(state: LoomState, offline: boolean, errorKind: string | null = null): string {
   if (offline && (state === "idle" || state === "error")) return "SENZA RETE";
+  if (state === "error" && errorKind !== null) {
+    if (MICROPHONE_ERRORS.has(errorKind)) return "MICROFONO CHIUSO";
+    if (THREAD_ERRORS.has(errorKind)) return "FILO SPEZZATO";
+  }
   return STATE_LABELS[state];
 }
 
@@ -29,7 +51,7 @@ export function stateLabel(state: LoomState, offline: boolean): string {
 export function thresholdLabel(state: LoomState, mode: ListenMode | null): string {
   switch (state) {
     case "setup":
-      return "Apri le impostazioni";
+      return "Inserisci la chiave API";
     case "idle":
       return mode === "push" ? "Tieni premuto e parla" : "Tocca per iniziare";
     case "listening":
@@ -49,8 +71,6 @@ export function thresholdLabel(state: LoomState, mode: ListenMode | null): strin
 /** Which callback a tap (or press) on the threshold should reach. */
 export function thresholdAction(state: LoomState, mode: ListenMode | null): ThresholdAction {
   switch (state) {
-    case "setup":
-      return "label";
     case "thinking":
     case "speaking":
     case "correcting":
@@ -59,6 +79,7 @@ export function thresholdAction(state: LoomState, mode: ListenMode | null): Thre
     case "listening":
     case "repeating":
       return mode === "push" ? "press" : "tap";
+    case "setup":
     case "error":
       return "tap";
   }
@@ -85,11 +106,14 @@ export interface PortraitStroke {
 const PORTRAIT_MAX_STROKES = 32;
 const PORTRAIT_FULL_LENGTH = 48;
 
-/** Latest rows as horizontal strokes: length = text length, darkness = weight. */
+/**
+ * Latest rows as horizontal strokes: length = text length, darkness = weight. The cloth
+ * is newest-first (the app unshifts), so the first rows are the latest.
+ */
 export function portraitStrokes(
   rows: ReadonlyArray<{ readonly textEn: string; readonly weight: 300 | 500 | 700 }>,
 ): PortraitStroke[] {
-  const slice = rows.slice(-PORTRAIT_MAX_STROKES);
+  const slice = rows.slice(0, PORTRAIT_MAX_STROKES);
   return slice.map((row) => ({
     width: Math.min(1, Math.max(0.1, row.textEn.length / PORTRAIT_FULL_LENGTH)),
     darkness: row.weight === 700 ? 1 : row.weight === 500 ? 0.65 : 0.35,

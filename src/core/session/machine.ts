@@ -27,10 +27,17 @@ import type {
   TurnTimings,
 } from "./types";
 
+export type EnglishVariant = "en-GB" | "en-US";
+
 export interface SessionMachineOptions {
   readonly now: () => number;
-  readonly englishVariant: "en-GB" | "en-US";
+  /** A value, or a getter so a change in the settings is honoured at the next turn. */
+  readonly englishVariant: EnglishVariant | (() => EnglishVariant);
   readonly initialListenLang?: LangTag;
+}
+
+function variantOf(options: SessionMachineOptions): EnglishVariant {
+  return typeof options.englishVariant === "function" ? options.englishVariant() : options.englishVariant;
 }
 
 export const SLOW_RATE = 0.8;
@@ -92,8 +99,8 @@ export function llmErrorMessage(error: LlmError): string {
       const seconds =
         error.retryAfterMs === undefined ? null : Math.max(1, Math.ceil(error.retryAfterMs / 1000));
       return seconds === null
-        ? "Troppe richieste, riprova tra poco"
-        : `Troppe richieste, riprovo tra ${seconds} s`;
+        ? "Troppe richieste: riprova tra poco"
+        : `Troppe richieste: riprova tra ${seconds} s`;
     }
     case "overloaded":
       return "Il modello è sovraccarico, riprova tra poco";
@@ -106,7 +113,7 @@ export function llmErrorMessage(error: LlmError): string {
     case "refusal":
       return "Vera non può rispondere a questo: proviamo un'altra frase";
     case "max-tokens":
-      return "Risposta interrotta, riprovo";
+      return "Risposta interrotta: riprova";
     case "bad-request":
       return "Richiesta non valida: riprova";
     default:
@@ -143,7 +150,7 @@ export function createSessionMachine(options: SessionMachineOptions): SessionMac
     state: "setup",
     mode: null,
     listenLang: options.initialListenLang ?? "it-IT",
-    englishVariant: options.englishVariant,
+    englishVariant: variantOf(options),
     slowMode: false,
     interim: "",
     transcript: "",
@@ -272,16 +279,28 @@ function indexOfLastEnglish(segments: readonly Segment[]): number {
   return segments.length - 1;
 }
 
-/** Re-speaks the last reply from `from` to `upTo` (inclusive) at `rate`, then relistens. */
-function replay(ctx: Ctx, from: number, upTo: number, rate: number): boolean {
-  const response = ctx.snap.lastResponse;
-  if (response === null || response.segments.length === 0) return false;
+/**
+ * What "ripeti" repeats: the reply being streamed or spoken (even if LLM_DONE has not
+ * arrived yet), otherwise the last committed reply.
+ */
+function replaySource(ctx: Ctx): readonly Segment[] {
+  if (ctx.int.turnActive) return ctx.snap.segments;
+  return ctx.snap.lastResponse?.segments ?? [];
+}
+
+/** Re-speaks from `from` to `upTo` (inclusive, null = to the end) at `rate`, then relistens. */
+function replay(ctx: Ctx, from: number, upTo: number | null, rate: number): boolean {
+  const segments = replaySource(ctx);
+  if (segments.length === 0 || from < 0 || from >= segments.length) return false;
   const committed = ctx.int.turnCommitted || !ctx.int.turnActive;
   quiesce(ctx);
-  set(ctx, { state: "speaking", interim: "", segments: response.segments, spokenUpTo: from - 1 });
-  // A reply still streaming is restarted from the top and keeps the normal flow; a
-  // committed one is a pure replay that must not be committed twice.
-  setInt(ctx, { replayUpTo: committed ? upTo : null });
+  // While the turn is active `segments` is already the current list: later LLM_SEGMENTs
+  // keep appending in order. After a commit the list is restored from the last response.
+  set(ctx, { state: "speaking", interim: "", segments, spokenUpTo: from - 1 });
+  // A reply still streaming is restarted and keeps the normal flow (commit at the end);
+  // a committed one is a pure replay that must not be committed twice.
+  const last = upTo === null ? segments.length - 1 : Math.min(upTo, segments.length - 1);
+  setInt(ctx, { replayUpTo: committed ? last : null });
   speak(ctx, from, rate);
   return true;
 }
@@ -289,14 +308,14 @@ function replay(ctx: Ctx, from: number, upTo: number, rate: number): boolean {
 function applyHelp(ctx: Ctx, kind: HelpKind, payload: string | undefined, text: string, now: number): void {
   switch (kind) {
     case "REPEAT": {
-      if (!replay(ctx, 0, ctx.snap.segments.length - 1, rateFor(ctx))) {
+      if (!replay(ctx, 0, null, rateFor(ctx))) {
         ctx.effects.push({ type: "notify", level: "info", message: "Non c'è ancora niente da ripetere" });
       }
       return;
     }
     case "SLOWER": {
       set(ctx, { slowMode: true });
-      if (!replay(ctx, 0, ctx.snap.segments.length - 1, SLOW_RATE)) {
+      if (!replay(ctx, 0, null, SLOW_RATE)) {
         ctx.effects.push({ type: "notify", level: "info", message: "Non c'è ancora niente da ripetere" });
       }
       return;
@@ -304,9 +323,9 @@ function applyHelp(ctx: Ctx, kind: HelpKind, payload: string | undefined, text: 
     case "DIDNT_UNDERSTAND": {
       const count = ctx.int.didntUnderstandCount + 1;
       setInt(ctx, { didntUnderstandCount: count });
-      const response = ctx.snap.lastResponse;
-      if (count === 1 && response !== null && response.segments.length > 0) {
-        const index = indexOfLastEnglish(response.segments);
+      const segments = replaySource(ctx);
+      if (count === 1 && segments.length > 0) {
+        const index = indexOfLastEnglish(segments);
         replay(ctx, index, index, SLOW_RATE);
         return;
       }
@@ -331,8 +350,9 @@ function applyHelp(ctx: Ctx, kind: HelpKind, payload: string | undefined, text: 
 function acceptsInput(ctx: Ctx, event: SessionEvent): boolean {
   const { state } = ctx.snap;
   if (event.type === "FINAL") return state === "listening";
-  // Typed text is accepted while listening, at rest (text mode) and while Vera speaks.
-  return state === "listening" || state === "idle" || state === "speaking";
+  // Typed text is accepted while listening, at rest (text mode), while Vera speaks and
+  // after an error (a new sentence is the most natural way out of it).
+  return state === "listening" || state === "idle" || state === "speaking" || state === "error";
 }
 
 function handleInput(ctx: Ctx, text: string, now: number): void {
@@ -392,12 +412,19 @@ function reduce(ctx: Ctx, event: SessionEvent, options: SessionMachineOptions): 
       if (state !== "idle" && state !== "error") return;
       set(ctx, { mode: event.mode, lastError: null, interim: "" });
       setInt(ctx, { errorOrigin: null, pendingHowToSay: false });
-      if (event.mode === "handsfree") {
+      if (event.mode === "handsfree" && event.deferListen !== true) {
         set(ctx, { state: "listening" });
         ctx.effects.push({ type: "listen", lang: ctx.snap.listenLang, mode: "continuous" });
       } else {
         set(ctx, { state: "idle" });
       }
+      return;
+    }
+    case "RESET_SETUP": {
+      if (state === "setup") return;
+      ctx.effects.push({ type: "abortListening" }, { type: "cancelSpeech" });
+      set(ctx, { state: "setup", mode: null, interim: "", lastError: null, segments: [], spokenUpTo: -1 });
+      setInt(ctx, INITIAL_INTERNAL);
       return;
     }
     case "STOP": {
@@ -438,6 +465,10 @@ function reduce(ctx: Ctx, event: SessionEvent, options: SessionMachineOptions): 
       return;
     }
     case "HELP": {
+      if (state === "thinking") {
+        ctx.effects.push({ type: "notify", level: "info", message: "Aspetta: Vera sta pensando" });
+        return;
+      }
       if (state !== "listening" && state !== "idle" && state !== "speaking") return;
       applyHelp(ctx, event.kind, undefined, "", options.now());
       return;
@@ -450,6 +481,8 @@ function reduce(ctx: Ctx, event: SessionEvent, options: SessionMachineOptions): 
     }
     case "INPUT_END": {
       if (state !== "listening" || event.cause === "own-abort") return;
+      // Idempotent on a closed recognizer; it also closes the level meter in the app.
+      ctx.effects.push({ type: "abortListening" });
       set(ctx, { state: "idle", interim: "" });
       setInt(ctx, { pendingHowToSay: false });
       ctx.effects.push({ type: "notify", level: "info", message: NOT_HEARD_MESSAGE });
@@ -476,6 +509,17 @@ function reduce(ctx: Ctx, event: SessionEvent, options: SessionMachineOptions): 
     case "LLM_DONE": {
       if (!ctx.int.turnActive) return;
       handleLlmDone(ctx, event.response, event.usage, event.atMs, options);
+      return;
+    }
+    case "LLM_RETRY": {
+      if (!ctx.int.turnActive) return;
+      if (state === "speaking") {
+        ctx.effects.push({ type: "cancelSpeech" });
+        set(ctx, { state: "thinking" });
+      }
+      // The partial reply is forgotten; the timings restart from the original request.
+      set(ctx, { segments: [], spokenUpTo: -1, timings: {} });
+      setInt(ctx, { speakingIndex: null, turnDone: false, usage: null, replayUpTo: null });
       return;
     }
     case "LLM_ERROR": {
@@ -544,7 +588,12 @@ function handleLlmDone(
   options: SessionMachineOptions,
 ): void {
   const previousLang = ctx.snap.listenLang;
-  set(ctx, { lastResponse: response, listenLang: langToTag(response.listen.lang, options.englishVariant) });
+  const variant = variantOf(options);
+  set(ctx, {
+    lastResponse: response,
+    englishVariant: variant,
+    listenLang: langToTag(response.listen.lang, variant),
+  });
   setInt(ctx, { turnDone: true, usage });
   // Segments the stream did not deliver one by one (or that closed with the final JSON).
   for (let i = ctx.snap.segments.length; i < response.segments.length; i += 1) {
